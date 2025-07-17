@@ -9,7 +9,7 @@ const qrDiv = document.getElementById("qrcode");
 
 const photoWidth = 640;
 const photoHeight = 360;
-const totalPhotos = 4;
+const totalPhotos = 8;
 let photoCanvases = [];
 
 navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
@@ -51,10 +51,10 @@ function capturePhoto() {
   ctx.filter = filterValue;
 
   // Deteksi apakah video sedang mirror
-  const isMirrored = video.style.transform === "scaleX(-1)";
+  const isMirrored = video.style.transform === "scaleX(1)";
   if (isMirrored) {
     ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1); // Membalik horizontal jika mirror
+    ctx.scale(1, -1); // Membalik horizontal jika mirror
   }
 
   ctx.drawImage(video, 0, 0, photoWidth, photoHeight);
@@ -71,74 +71,211 @@ async function takePhotos() {
     qrCanvasContainer.innerHTML =
       '<p class="qr-placeholder">QR akan muncul setelah foto selesai</p>';
   }
-  for (let i = 0; i < totalPhotos; i++) {
+
+  // Ambil Strip Pertama
+  for (let i = 0; i < 4; i++) {
     await showCountdown(3);
     capturePhoto();
   }
-  showPreview();
+
+  showPreview(true); // tampilkan preview strip 1
+
+  // Tampilkan tombol lanjut
+  const nextBtn = document.getElementById("nextStripBtn");
+  nextBtn.style.display = "inline-block";
+
+  // Tunggu sampai tombol "Lanjut" diklik
+  await new Promise((resolve) => {
+    nextBtn.onclick = () => {
+      nextBtn.style.display = "none";
+      resolve();
+    };
+  });
+
+  // Ambil Strip Kedua
+  for (let i = 0; i < 4; i++) {
+    await showCountdown(3);
+    capturePhoto();
+  }
+
+  showPreview(false); // tampilkan hasil final
   downloadBtn.disabled = false;
 }
 
-function showPreview() {
-  const spacing = 40;
-  const bottomSpace = 100;
+function drawQRCode(ctx, text, x, y, size) {
+  const qr = new QRious({ value: text, size: size });
+  const img = new Image();
+  img.src = qr.toDataURL();
+  return new Promise((resolve) => {
+    img.onload = () => {
+      ctx.drawImage(img, x, y, size, size);
+      resolve();
+    };
+  });
+}
+
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(" ");
+  let line = "";
+
+  for (let i = 0; i < words.length; i++) {
+    const testLine = line + words[i] + " ";
+    const testWidth = ctx.measureText(testLine).width;
+    if (testWidth > maxWidth && i > 0) {
+      ctx.fillText(line, x, y);
+      line = words[i] + " ";
+      y += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line, x, y);
+}
+
+
+async function showPreview(isPartial = false) {
+  const canvasWidth = 2400;
+  const canvasHeight = 3600;
+  const spacing = 30;
+  const rows = 4;
+  const columns = 2;
 
   const finalCanvas = document.createElement("canvas");
-  finalCanvas.width = photoWidth + 40;
-  finalCanvas.height = (photoHeight + spacing) * totalPhotos + bottomSpace;
+  finalCanvas.width = canvasWidth;
+  finalCanvas.height = canvasHeight;
   const ctx = finalCanvas.getContext("2d");
 
-  // Background putih
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // Gambar setiap foto ke dalam canvas final
-  photoCanvases.forEach((canvas, i) => {
-    ctx.drawImage(canvas, 20, i * (photoHeight + spacing));
-  });
+  const stripWidth = (canvasWidth - spacing * (columns + 1)) / columns;
+  const stripHeight = canvasHeight;
 
-  // Tambahkan teks di bawah foto
-  ctx.fillStyle = "#000";
-  ctx.font = "24px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(
-    "Take Your Time PhotoBooth",
-    finalCanvas.width / 2,
-    finalCanvas.height - 50
-  );
-  ctx.font = "16px sans-serif";
-  ctx.fillText(
-    "© 2025 SMK TI BAZMA",
-    finalCanvas.width / 2,
-    finalCanvas.height - 20
-  );
+  const footerImage = new Image();
+  footerImage.src = "/public/aset.png";
 
-  // Buat data URL dari canvas final
-  const dataURL = finalCanvas.toDataURL("image/png");
+  footerImage.onload = async () => {
+    const allStrips = [
+      photoCanvases.slice(0, 4),
+      isPartial ? [] : photoCanvases.slice(4, 8),
+    ];
 
-  // Tampilkan sebagai preview gambar dengan padding visual
-  const img = new Image();
-  img.src = dataURL;
+    const qrLinks = [
+      "https://example.com/strip1",
+      "https://example.com/strip2",
+    ];
 
-  // ✅ Tambahkan styling padding dan dekorasi
-  img.style.padding = "20px";
-  img.style.background = "#fff";
-  img.style.borderRadius = "10px";
-  img.style.boxShadow = "0 4px 10px rgba(0,0,0,0.1)";
-  img.style.maxWidth = "100%";
-  img.style.height = "auto";
-  img.style.display = "block";
-  img.style.margin = "20px auto";
+    for (let col = 0; col < allStrips.length; col++) {
+      const stripPhotos = allStrips[col];
+      const xBase = spacing + col * (stripWidth + spacing);
 
-  previewDiv.innerHTML = "";
-  previewDiv.appendChild(img);
+      const reservedFooterHeight = 250;
+      const reservedQRHeight = 200;
+      const photoAreaHeight =
+        stripHeight - spacing * 2 - reservedFooterHeight - reservedQRHeight;
 
-  // Simpan untuk download
-  downloadBtn.dataset.image = dataURL;
+      const availableHeight = (photoAreaHeight - (rows - 1) * spacing) / rows;
 
-  // Upload ke Cloudinary dan tampilkan QR
-  uploadImageToCloudinary(dataURL);
+      let photoHeight = availableHeight;
+      let photoWidth = photoHeight * (16 / 9);
+
+      if (photoWidth > stripWidth) {
+        const scaleFactor = stripWidth / photoWidth;
+        photoWidth = stripWidth;
+        photoHeight = photoHeight * scaleFactor;
+      }
+
+      // Gambar foto-foto
+      stripPhotos.forEach((canvas, i) => {
+        const x = xBase + (stripWidth - photoWidth) / 2;
+        const y = spacing + i * (photoHeight + spacing);
+        ctx.drawImage(canvas, x, y, photoWidth, photoHeight);
+      });
+
+      // Gambar footer image (branding) di atas QR dan alamat
+      const maxFooterWidth = stripWidth * 1;
+      const aspectRatio = footerImage.width / footerImage.height;
+      const footerWidth = maxFooterWidth;
+      const footerHeight = footerWidth / aspectRatio;
+      const footerX = xBase + (stripWidth - footerWidth) / 2;
+      const footerY = stripHeight - reservedQRHeight - footerHeight - 220;
+      ctx.drawImage(footerImage, footerX, footerY, footerWidth, footerHeight);
+
+      // Gambar QR Code di kanan bawah
+      const qrSize = 300;
+      const qrX = xBase + stripWidth - qrSize - 40;
+      const qrY = stripHeight - qrSize - 80;
+      await drawQRCode(ctx, qrLinks[col], qrX, qrY, qrSize);
+
+      // Tampilkan alamat di kiri bawah
+     const addressHeading = "SMK TI BAZMA";
+const addressSub = "Jl. Raya Kalijati No.88, Subang, Jawa Barat, Indonesia – Energi Masa Depan Indonesia";
+
+// Koordinat dasar kiri bawah
+const textX = xBase + 40;
+const textYBase = stripHeight - 100;
+
+// Teks Heading
+ctx.fillStyle = "#5070B6";
+ctx.font = "bold 64px Arial";
+ctx.textAlign = "left";
+ctx.fillText(addressHeading, textX, textYBase - 80); // heading di atas
+
+// Deskripsi multiline
+ctx.fillStyle = "#5070B6";
+ctx.font = "italic 32px Arial";
+const maxTextWidth = stripWidth -80; // jaga margin kanan
+const lineHeight = 30;
+
+wrapText(ctx, addressSub, textX, textYBase - 24, 720, 40);
+
+
+    }
+
+    // Preview kecil
+    finalCanvas.style.width = "300px";
+    finalCanvas.style.height = "auto";
+    previewDiv.innerHTML = "";
+    previewDiv.appendChild(finalCanvas);
+
+    if (!isPartial) {
+      const dataURL = finalCanvas.toDataURL("image/png");
+      downloadBtn.dataset.image = dataURL;
+      uploadImageToCloudinary(dataURL);
+    }
+  };
 }
+
+const printBtn = document.getElementById("printBtn");
+
+printBtn.addEventListener("click", () => {
+  const imgDataUrl = downloadBtn.dataset.image;
+  if (!imgDataUrl) return alert("Tidak ada gambar untuk dicetak.");
+
+  const printWindow = window.open("", "_blank");
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Print Photo Strip</title>
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            text-align: center;
+          }
+          img {
+            max-width: 100%;
+            height: auto;
+            margin: 0 auto;
+          }
+        </style>
+      </head>
+      <body>
+        <img src="${imgDataUrl}" onload="window.print(); window.onafterprint = () => window.close();" />
+      </body>
+    </html>
+  `);
+});
 
 
 async function uploadImageToCloudinary(dataURL) {
@@ -218,9 +355,9 @@ downloadBtn.addEventListener("click", () => {
 const mirrorSelect = document.getElementById("mirror"); // ID dari <select> yang kamu buat
 
 mirrorSelect.addEventListener("change", () => {
-  if (mirrorSelect.value === "no") {
-    video.style.transform = "scaleX(1)"; // Normal (tidak mirror)
+  if (mirrorSelect.value === "yes") {
+    video.style.transform = "scaleX(-1)"; // Normal (tidak mirror)
   } else {
-    video.style.transform = "scaleX(-1)"; // Mirror
+    video.style.transform = "scaleX(1)"; // Mirror
   }
 });
